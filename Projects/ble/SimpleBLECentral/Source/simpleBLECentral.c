@@ -81,7 +81,7 @@
 
 // Length of bd addr as a string
 #define B_ADDR_STR_LEN                        15
-
+void WriteValue(unsigned short handle,unsigned char *value,unsigned char len);
 /*********************************************************************
  * CONSTANTS
  */
@@ -843,6 +843,8 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
            NPI_PrintString("Connected device  ");     
           NPI_PrintString(bdAddr2Str( pEvent->linkCmpl.devAddr));
           NPI_PrintString("\r\n");
+          unsigned char read_time[2] = {0x00,0x04};
+           WriteValue(0x14,read_time,2);
         }
         else
         {
