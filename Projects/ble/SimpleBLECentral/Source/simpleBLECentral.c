@@ -244,6 +244,8 @@ static bool simpleBLEFindSvcUuid( uint16 uuid, uint8 *pData, uint8 dataLen );
 static void simpleBLEAddDeviceInfo( uint8 *pAddr, uint8 addrType );
 char *bdAddr2Str ( uint8 *pAddr );
 static void NpiSerialCallback( uint8 port, uint8 events );
+uint8 calc_data_send(uint8 * ptr,uint8 size,uint8 type);
+void uart2_send_byte(uint8 data);
 /*********************************************************************
  * PROFILE CALLBACKS
  */
@@ -294,7 +296,7 @@ void SimpleBLECentral_Init( uint8 task_id )
   GAP_SetParamValue( TGAP_GEN_DISC_SCAN, DEFAULT_SCAN_DURATION );
   GAP_SetParamValue( TGAP_LIM_DISC_SCAN, DEFAULT_SCAN_DURATION );
   GGS_SetParameter( GGS_DEVICE_NAME_ATT, GAP_DEVICE_NAME_LEN, (uint8 *) simpleBLEDeviceName );
-
+  GAP_SetParamValue( TGAP_CONN_EST_SUPERV_TIMEOUT,200);
   // Setup the GAP Bond Manager
   {
     uint32 passkey = DEFAULT_PASSCODE;
@@ -660,8 +662,9 @@ static void simpleBLECentralProcessGATTMsg( gattMsgEvent_t *pMsg )
      }
      NPI_PrintString("\r\n");
     }
-      GATT_DiscAllChars( simpleBLEConnHandle, 0x0010,
-                                        0x002C, simpleBLETaskId );
+#if 0
+      GATT_DiscAllChars( simpleBLEConnHandle, 0x0010,0x002C, simpleBLETaskId );
+#endif
     // HalUARTWrite( NPI_UART_PORT, handle, pMsg->msg.readByGrpTypeRsp.len );
   }
   else if(pMsg->method == ATT_READ_BY_TYPE_RSP && pMsg->msg.readByTypeRsp.numPairs >0)
@@ -843,8 +846,8 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
            NPI_PrintString("Connected device  ");     
           NPI_PrintString(bdAddr2Str( pEvent->linkCmpl.devAddr));
           NPI_PrintString("\r\n");
-          unsigned char read_time[2] = {0x00,0x04};
-           WriteValue(0x14,read_time,2);
+          unsigned char read_time[2] = {0x00,0x03};
+           WriteValue(0x15,read_time,2);
         }
         else
         {
@@ -1204,7 +1207,7 @@ void WriteValue(unsigned short handle,unsigned char *value,unsigned char len)
  req.pValue = GATT_bm_alloc( simpleBLEConnHandle, ATT_WRITE_REQ, len, NULL );
   if ( req.pValue != NULL )
   {
-   NPI_PrintString("writing...\r\n");
+ //  NPI_PrintString("writing...\r\n");
                   
    req.handle = handle;
    req.len = len;
@@ -1214,6 +1217,14 @@ void WriteValue(unsigned short handle,unsigned char *value,unsigned char len)
                   
    req.sig = 0;
    req.cmd = 0;
+   if(handle == 0x1E)
+   {
+     req.sig = 0;
+     req.cmd =1;
+     status = GATT_WriteNoRsp( simpleBLEConnHandle, &req);
+   }
+   else
+   
    status = GATT_WriteCharValue( simpleBLEConnHandle, &req, simpleBLETaskId );
    if ( status != SUCCESS )
    {
@@ -1221,7 +1232,7 @@ void WriteValue(unsigned short handle,unsigned char *value,unsigned char len)
    }
    else
    {
-     NPI_PrintString("write ok\r\n");
+     //NPI_PrintString("write ok\r\n");
    }
   }
 }
@@ -1262,9 +1273,19 @@ static void NpiSerialCallback( uint8 port, uint8 events )
 
                 if(strncmp(rxData,"connect Mac",11) == 0)
                 {
+                  
+                  if ( simpleBLEState == BLE_STATE_CONNECTED )
+                  {
+                   NPI_PrintString("Already connected");
+                   NPI_PrintString("\r\n");
+                  }
                   uint8 macAddr[18] = {0};
                   static uint8 macAddrHex[6];
                   memcpy(macAddr,rxData+ 12,17);
+                 
+                  
+              //    calc_data_send(macAddr,6,0x85);
+                //  HalUARTWrite( NPI_UART_PORT, buf, len );
                   sscanf(macAddr,"%x:%x:%x:%x:%x:%x",macAddrHex,macAddrHex+1,macAddrHex+2,macAddrHex+3,macAddrHex+4,macAddrHex+5);
                   
                   NPI_PrintString("connecting Mac ");
@@ -1304,12 +1325,15 @@ static void NpiSerialCallback( uint8 port, uint8 events )
                          writeValue+12,writeValue+13,writeValue+14,writeValue+15,writeValue+16,writeValue+17,
                          writeValue+18,writeValue+19);
                  // sscanf(rxData+15,"WriteHandle:%d",&handle);
-                 
+               
                    WriteValue(handle,writeValue,len);
+          //        //  unsigned char read_time[2] = {0x00,0x03};
+          // WriteValue(0x15,read_time,2);
                  // WriteValue(0x15,writeValue,3);
                     rx_len = 0;
                  memset(rxData,0,50);
                 }
+              //  rx_len = 0;
                 HalLcd_HW_WaitUs(5000);
                   osal_mem_free(buffer); 
            // }
@@ -1562,3 +1586,64 @@ static void NpiSerialCallback( uint8 port, uint8 events )
 }  
 /*********************************************************************
 *********************************************************************/
+
+
+
+uint8 calc_data_send(uint8 * ptr,uint8 size,uint8 type)
+{
+	uint8 checksum = 0;
+	uint8 tx_data = 0;
+	//send header
+  uart2_send_byte(0xF0);
+	uart2_send_byte(type);
+	uart2_send_byte(size);
+	checksum = checksum + type + size;
+	while(size>0)
+	{
+	 switch(*ptr)
+	 {
+		 case 0xF0:
+			 uart2_send_byte(0xF5);
+		   uart2_send_byte(0x01);
+			 break;
+		 case 0xFA:
+			 uart2_send_byte(0xF5);
+		   uart2_send_byte(0x02);
+			 break;
+		 case 0xF5:
+			 uart2_send_byte(0xF5);
+		   uart2_send_byte(0x03);
+			 break;
+		 default:
+			 uart2_send_byte(*ptr);
+			 break;
+	 }
+	 checksum += *ptr;
+	 ptr ++;
+	 size --;
+	}
+	switch(checksum)
+	 {
+		 case 0xF0:
+			 uart2_send_byte(0xF5);
+		   uart2_send_byte(0x01);
+			 break;
+		 case 0xFA:
+			 uart2_send_byte(0xF5);
+		   uart2_send_byte(0x02);
+			 break;
+		 case 0xF5:
+			 uart2_send_byte(0xF5);
+		   uart2_send_byte(0x03);
+			 break;
+		 default:
+			 uart2_send_byte(checksum);
+			 break;
+	 }
+	uart2_send_byte(0xFA);
+	return 0;
+}
+void uart2_send_byte(uint8 data)
+{
+  HalUARTWrite( NPI_UART_PORT, &data, 1 );
+}
