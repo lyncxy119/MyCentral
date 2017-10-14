@@ -70,10 +70,25 @@
 /*********************************************************************
  * MACROS
  */
+
+
+#define STATUS_DISCONNECTED 0x30
+#define STATUS_CONNECTING	0x31
+#define STATUS_CONNECTED	0x32
+#define STATUS_NOTIFY		0x33
+
+#define CONNECT_REQ	0x40
+#define WRITE_CMD	0x41
+#define DISCONNECT_REQ 0x42
+
+
+
+
 #define SEEK_HEAD 0
 #define SEEK_LEN 1
 #define SEEK_TYPE 2
 #define RX_DATA  3
+#define SEEK_CHECKSUM 8
 #define ESC      4
 #define ESC_F0       5
 #define ESC_F5       6
@@ -296,7 +311,7 @@ void SimpleBLECentral_Init( uint8 task_id )
   GAP_SetParamValue( TGAP_GEN_DISC_SCAN, DEFAULT_SCAN_DURATION );
   GAP_SetParamValue( TGAP_LIM_DISC_SCAN, DEFAULT_SCAN_DURATION );
   GGS_SetParameter( GGS_DEVICE_NAME_ATT, GAP_DEVICE_NAME_LEN, (uint8 *) simpleBLEDeviceName );
-  GAP_SetParamValue( TGAP_CONN_EST_SUPERV_TIMEOUT,200);
+  GAP_SetParamValue( TGAP_CONN_EST_SUPERV_TIMEOUT,100);
   // Setup the GAP Bond Manager
   {
     uint32 passkey = DEFAULT_PASSCODE;
@@ -339,7 +354,7 @@ NPI_WriteTransport("I'm coming\r\n", 20);
 // 按字符串输出    
 NPI_PrintString("SimpleBLETest_Init2\r\n");      
     */
-#if 1
+#if 0
 // 可以输出一个值，用10进制表示    
 NPI_PrintValue("甜甜的大香瓜1 = ", 168, 10);    
 NPI_PrintString("\r\n");      
@@ -694,7 +709,7 @@ static void simpleBLECentralProcessGATTMsg( gattMsgEvent_t *pMsg )
     {
       static uint8 notifyData[20];
       static uint8 handlestr[2];
-      
+#if 0
       // After a successful read, display the read value
       //uint8 valueRead = pMsg->msg.readRsp.value[0];
       noti.handle = pMsg->msg.handleValueNoti.handle;
@@ -714,6 +729,19 @@ static void simpleBLECentralProcessGATTMsg( gattMsgEvent_t *pMsg )
       //NPI_PrintString(handlestr);
       NPI_PrintString("  \r\n");
  //NPI_PrintString("notify\r\n");
+#endif
+       noti.handle = pMsg->msg.handleValueNoti.handle;
+        noti.len = pMsg->msg.handleValueNoti.len;
+        osal_memcpy(notifyData, (uint8 *)&noti.handle,2);
+      osal_memcpy(notifyData+2, pMsg->msg.handleValueNoti.pValue,noti.len);
+   /*  if(noti.handle == 0x0022)
+      {
+       if(notifyData[2] == 0xFA)
+       {
+        printf("  ");
+       }
+      }*/
+      calc_data_send(notifyData,noti.len + 2,STATUS_NOTIFY);
     }
   }
   else if ( ( pMsg->method == ATT_WRITE_RSP ) ||
@@ -843,9 +871,11 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
           {
             osal_start_timerEx( simpleBLETaskId, START_DISCOVERY_EVT, DEFAULT_SVC_DISCOVERY_DELAY );
           }
-           NPI_PrintString("Connected device  ");     
-          NPI_PrintString(bdAddr2Str( pEvent->linkCmpl.devAddr));
-          NPI_PrintString("\r\n");
+         //  NPI_PrintString("Connected device  ");     
+        //  NPI_PrintString(bdAddr2Str( pEvent->linkCmpl.devAddr));
+       //   NPI_PrintString("\r\n");
+          uint8 data;
+          calc_data_send(&data,1,STATUS_CONNECTED);
           unsigned char read_time[2] = {0x00,0x03};
            WriteValue(0x15,read_time,2);
         }
@@ -870,7 +900,10 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
         simpleBLEDiscState = BLE_DISC_STATE_IDLE;
         simpleBLECharHdl = 0;
         simpleBLEProcedureInProgress = FALSE;
-        NPI_PrintString("disconnected\r\n");  
+        uint8 data;
+        
+        calc_data_send(&data,1,STATUS_DISCONNECTED);
+       // NPI_PrintString("disconnected\r\n");  
      /*   LCD_WRITE_STRING( "Disconnected", HAL_LCD_LINE_1 );
         LCD_WRITE_STRING_VALUE( "Reason:", pEvent->linkTerminate.reason,
                                 10, HAL_LCD_LINE_2 );*/
@@ -973,7 +1006,7 @@ static void simpleBLECentralStartDiscovery( void )
   simpleBLEDiscState = BLE_DISC_STATE_SVC;
  // GATT_DiscAllChars(simpleBLEConnHandle,14,20,simpleBLETaskId);
   // Discovery simple BLE service
- /* GATT_DiscPrimaryServiceByUUID( simpleBLEConnHandle,
+ /*GATT_DiscPrimaryServiceByUUID( simpleBLEConnHandle,
                                  uuid,
                                  ATT_UUID_SIZE,
                                  simpleBLETaskId );*/
@@ -1192,8 +1225,9 @@ void ConnectMac(uint8 * macAddr)
                                 
      addrType = 0;
      simpleBLEState = BLE_STATE_CONNECTING;
-     NPI_PrintString("Connecting...\r\n");
-                                
+   //  NPI_PrintString("Connecting...\r\n");
+      uint8 data = 1;             
+     calc_data_send(&data,1,STATUS_CONNECTING);
     GAPCentralRole_EstablishLink( DEFAULT_LINK_HIGH_DUTY_CYCLE,
                                   DEFAULT_LINK_WHITE_LIST,
                                   addrType, peerAddr );
@@ -1254,13 +1288,16 @@ static void NpiSerialCallback( uint8 port, uint8 events )
         {  
           static uint8 currState = SEEK_HEAD,rxlen = 0,index = 0,rxLEN,rxTYPE;
             //申请缓冲区buffer  
-            uint8 *buffer = osal_mem_alloc(numBytes); 
-            uint8 rxByte,escFlag = 0;
+          //  uint8 *buffer = osal_mem_alloc(numBytes); 
+             static uint8 rxByte,escFlag = 0,checksum_byte = 0;
             
-            if(buffer)  
+            if(1)  
             {  
                 //读取读取串口缓冲区数据，释放串口数据     
-                NPI_ReadTransport(buffer,numBytes); 
+              //  NPI_ReadTransport(buffer,numBytes); 
+                
+         //       HalUARTWrite( NPI_UART_PORT, buffer, numBytes);
+#if 0
                 static uint8 rx_len = 0;
                 memcpy(rxData + rx_len,buffer,numBytes);
                 rx_len = numBytes;
@@ -1333,16 +1370,29 @@ static void NpiSerialCallback( uint8 port, uint8 events )
                     rx_len = 0;
                  memset(rxData,0,50);
                 }
+                else
+                {
+                  for(uint8 i =0;i<100;i++)
+                  {
+                    if(rxData[i] == '\n')
+                    {
+                      memset(rxData,0,50);
+                      rx_len = 0;
+                      break;
+                    }
+                  }
+                }
               //  rx_len = 0;
                 HalLcd_HW_WaitUs(5000);
                   osal_mem_free(buffer); 
-           // }
-#if 0
-                for(uint8 i =0;i<numBytes;i++)
+#endif
+#if 1
+               for(uint8 i =0;i<numBytes;i++)
                 {
+                   NPI_ReadTransport(&rxByte,1);
                  
-                  rxByte = *(buffer+i);
-                  if(*(buffer+i) == 0xF0)
+                 // rxByte = *(buffer+i);
+                  if(rxByte == 0xF0)
                   {
                     currState = SEEK_HEAD;
                   }
@@ -1362,7 +1412,7 @@ static void NpiSerialCallback( uint8 port, uint8 events )
                     rxLEN = rxByte;
                     break;
                   case RX_DATA:
-                       if(rxlen < rxLEN)
+                       if((rxlen < rxLEN))
                        {
                          if(rxByte == 0xF5)
                           {
@@ -1378,10 +1428,10 @@ static void NpiSerialCallback( uint8 port, uint8 events )
                              rxData[rxlen++] = 0xF0;
                               break;
                             case 0x02:
-                              rxData[rxlen++] = 0xF5;
+                              rxData[rxlen++] = 0xFA;
                               break;
                             case 0x03:
-                              rxData[rxlen++] = 0xFA;
+                              rxData[rxlen++] = 0xF5;
                               break;
                             default:
                               break;
@@ -1389,16 +1439,60 @@ static void NpiSerialCallback( uint8 port, uint8 events )
                            }
                            else
                            {
-                            rxData[rxlen++] = rxByte;
+                            rxData[rxlen] = rxByte;
+                           
+                            rxlen++;
+                           }
+                       }
+                       else
+                       {
+                        
+                        if(rxByte == 0xF5)
+                          {
+                            escFlag = 1;
+                            continue;
+                          }
+                          else
+                          {
+                              currState = SEEK_CHECKSUM;
+                              checksum_byte = rxByte;   
+                          }
+                          if(escFlag == 1)
+                          {
+                            escFlag = 0;
+                            switch(rxByte)
+                            {
+                            case 0x01:
+                              currState = SEEK_CHECKSUM;
+                             checksum_byte = 0xF0;
+                              break;
+                            case 0x02:
+                             checksum_byte = 0xFA;
+                             currState = SEEK_CHECKSUM;
+                              break;
+                            case 0x03:
+                              checksum_byte = 0xF5;
+                              currState = SEEK_CHECKSUM;
+                              break;
+                            default:
+                              break;
+                            }
+                           }
+                           
+                      
+                       }
+                    break;
+                  case SEEK_CHECKSUM:
+                    
                             if(rxlen == rxLEN)
                             {
                                uint8 checksum = 0;
-                               for(uint8 i = 0;i< rxLEN - 1;i++)
+                               for(uint8 i = 0;i< rxLEN;i++)
                                {
                                 checksum = checksum + rxData[i];
                                }
                                checksum = checksum + rxLEN + rxTYPE;
-                               if(checksum == rxData[rxlen -1])
+                               if(checksum == checksum_byte)
                                {
                                 switch(rxTYPE)
                                 {
@@ -1409,64 +1503,60 @@ static void NpiSerialCallback( uint8 port, uint8 events )
                                        DEFAULT_DISCOVERY_ACTIVE_SCAN,
                                        DEFAULT_DISCOVERY_WHITE_LIST );
                                   break;
-                                case 0x02://连接蓝牙
+                                case CONNECT_REQ://连接蓝牙
                                   char *peerAddr;
                                   uint8 addrType;
-                                  // connect to current device in scan result
-                                 // peerAddr = {0x5F,0x15,0x00,0x01,0x35,0xEF};
-                                /*  peerAddr[0] = 0x5F;
-                                  peerAddr[1] = 0x15;
-                                  peerAddr[2] = 0x00;
-                                  peerAddr[3] = 0x01;
-                                  peerAddr[4] = 0x35;
-                                  peerAddr[5] = 0xEF;*/
-                                  peerAddr[5] = rxData[0];
-                                  peerAddr[4] = rxData[1];
-                                  peerAddr[3] = rxData[2];
-                                  peerAddr[2] = rxData[3];
-                                  peerAddr[1] = rxData[4];
-                                  peerAddr[0] = rxData[5];
-                                     // memcpy(peerAddr,rxData,6);
-                                  addrType = 0;
-                             //   static uint8 debugDisplay[6];
-                               // memcpy(debugDisplay,peerAddr,6);
-                                  simpleBLEState = BLE_STATE_CONNECTING;
-                                  NPI_PrintString("Connecting...\r\n");
-                                
-                                //NPI_PrintString("\r\n");
-                                  GAPCentralRole_EstablishLink( DEFAULT_LINK_HIGH_DUTY_CYCLE,
-                                                                DEFAULT_LINK_WHITE_LIST,
-                                                                addrType, peerAddr );
+                                 
+                                  uint8 mac[6];
+                                  memcpy(mac,rxData,6);
+                                  ConnectMac(mac);
+              
                                   break;
-                                case 0x03:
+                                case DISCONNECT_REQ://断开蓝牙连接
                                   GAPCentralRole_TerminateLink(simpleBLEConnHandle);
                                   break;
-                                case 0x04:
+                                case WRITE_CMD://写入数据
+                                  
+                                  static unsigned short handle,len;               
+                                  
+                                  static unsigned char writeValue[20]={0x00};
+                                  
+                                  if(rxLEN <= 2)
+                                  {
+                                    rxLEN = 3;
+                                  }
+                                  len = rxLEN -2;
+                                  
+                                  
+                                  memcpy(&handle,&rxData[0],2);
+                                  
+                                  memcpy(writeValue,&rxData[2],len);
+                                  
+                                //  if(handle == 0x001E && rxData[2] == 0x05)
+                                  {
+                                //     WriteValue(handle,writeValue,len -1);
+                                  }
+                               
+                                  WriteValue(handle,writeValue,len);
+                             //     osal_mem_free(buffer); 
                                   break;
                                 default:
                                   break;
                                 }
                                }
-                                 
+                                 else
+                                 {
+                                   uint8 buff[10];
+                                  HalUARTWrite( NPI_UART_PORT, buff, 1 );
+                                 }
                                rxlen = 0;
                                  rxLEN = 0;
                                  index = 0;
                                 currState = SEEK_HEAD;
                                 //释放申请的缓冲区  
-                                osal_mem_free(buffer); 
+ // HalLcd_HW_WaitUs(5000);
+                              //  osal_mem_free(buffer); 
                             }
-                           }
-                       }
-                       else
-                       {
-                        
-                         rxlen = 0;
-                         rxLEN = 0;
-                        currState = SEEK_HEAD;
-                        index = 0;
-                        //释放申请的缓冲区  
-              
-                       }
                     break;
                     
                   }
@@ -1514,73 +1604,12 @@ static void NpiSerialCallback( uint8 port, uint8 events )
      //   GATT_DiscAllCharDescs(simpleBLEConnHandle,12,15,simpleBLETaskId);
                 }
 #endif
-        /*        
-                if(buffer[0] == 0x03)
-                {
-                  char status;
-                   attWriteReq_t req;
-        
-                req.pValue = GATT_bm_alloc( simpleBLEConnHandle, ATT_WRITE_REQ, 3, NULL );
-                if ( req.pValue != NULL )
-                {
-                  NPI_PrintString("writing...\r\n");
-                  
-                  
-                  req.handle = 0x12;
-                  req.len = 2;
-                  req.pValue[0] = 0x01;
-                  req.pValue[1] = 0x00;
-                  
-                  req.sig = 0;
-                  req.cmd = 0;
-                  status = GATT_WriteCharValue( simpleBLEConnHandle, &req, simpleBLETaskId );
-                  
-                  if ( status != SUCCESS )
-                  {
-                    GATT_bm_free( (gattMsg_t *)&req, ATT_WRITE_REQ );
-                  }
-                  else
-                  {
-                    NPI_PrintString("write ok\r\n");
-                  }
-                
-                }
-                }
-                if(buffer[0] == 0x04)
-                {
-                  char status;
-                   attWriteReq_t req;
-        
-                req.pValue = GATT_bm_alloc( simpleBLEConnHandle, ATT_WRITE_REQ, 3, NULL );
-                if ( req.pValue != NULL )
-                {
-                  NPI_PrintString("writing...\r\n");
-                  
-              
-                  req.handle = 0x15;
-                  req.len = 3;
-                  req.pValue[0] = 0x00;
-                  req.pValue[1] = 0x07;
-                  req.pValue[2] = 0x02;
-                  req.sig = 0;
-                  req.cmd = 0;
-                  status = GATT_WriteCharValue( simpleBLEConnHandle, &req, simpleBLETaskId );
-                  if ( status != SUCCESS )
-                  {
-                    GATT_bm_free( (gattMsg_t *)&req, ATT_WRITE_REQ );
-                  }
-                  else
-                  {
-                    NPI_PrintString("write ok\r\n");
-                  } 
-                }
-               
-                    //把收到的数据发送到串口-实现回环   
-               // NPI_WriteTransport(buffer, numBytes); 
-              }  */
-                 
-              
+          
        }  
+       else
+       {
+        printf("error\n");
+       }
     } 
     }
 }  
@@ -1589,61 +1618,79 @@ static void NpiSerialCallback( uint8 port, uint8 events )
 
 
 
-uint8 calc_data_send(uint8 * ptr,uint8 size,uint8 type)
+uint8 calc_data_send(uint8 * ptr, uint8 size, uint8 type)
 {
-	uint8 checksum = 0;
+	uint8 checksum = 0,pkt_size = 0;
 	uint8 tx_data = 0;
+	uint8 cmd_pkt[200];
+	cmd_pkt[0] = 0xF0;
+	cmd_pkt[1] = type;
+	cmd_pkt[2] = size;
 	//send header
-  uart2_send_byte(0xF0);
-	uart2_send_byte(type);
-	uart2_send_byte(size);
 	checksum = checksum + type + size;
-	while(size>0)
+	pkt_size = pkt_size + size + 1 + 1 + 1 + 1 + 1;//F0 + type + len + checksum + FA
+	int index = 3;
+	while (size>0)
 	{
-	 switch(*ptr)
-	 {
-		 case 0xF0:
-			 uart2_send_byte(0xF5);
-		   uart2_send_byte(0x01);
-			 break;
-		 case 0xFA:
-			 uart2_send_byte(0xF5);
-		   uart2_send_byte(0x02);
-			 break;
-		 case 0xF5:
-			 uart2_send_byte(0xF5);
-		   uart2_send_byte(0x03);
-			 break;
-		 default:
-			 uart2_send_byte(*ptr);
-			 break;
-	 }
-	 checksum += *ptr;
-	 ptr ++;
-	 size --;
+		switch (*ptr)
+		{
+		case 0xF0:
+			//uart2_send_byte(0xF5);
+			//uart2_send_byte(0x01);
+			cmd_pkt[index++] = 0xF5;
+			cmd_pkt[index++] = 0x01;
+			pkt_size++;
+			break;
+		case 0xFA:
+			cmd_pkt[index++] = 0xF5;
+			cmd_pkt[index++] = 0x02;
+			pkt_size++;
+			break;
+		case 0xF5:
+			cmd_pkt[index++] = 0xF5;
+			cmd_pkt[index++] = 0x03;
+			pkt_size++;
+			break;
+		default:
+			//uart2_send_byte(*ptr);
+			cmd_pkt[index++] = *ptr;
+			break;
+		 }
+		checksum += *ptr;
+		ptr++;
+		size--;
 	}
-	switch(checksum)
-	 {
-		 case 0xF0:
-			 uart2_send_byte(0xF5);
-		   uart2_send_byte(0x01);
-			 break;
-		 case 0xFA:
-			 uart2_send_byte(0xF5);
-		   uart2_send_byte(0x02);
-			 break;
-		 case 0xF5:
-			 uart2_send_byte(0xF5);
-		   uart2_send_byte(0x03);
-			 break;
-		 default:
-			 uart2_send_byte(checksum);
-			 break;
-	 }
-	uart2_send_byte(0xFA);
+	switch (checksum)
+	{
+	case 0xF0:
+		//uart2_send_byte(0xF5);
+		//uart2_send_byte(0x01);
+		cmd_pkt[index++] = 0xF5;
+		cmd_pkt[index++] = 0x01;
+		pkt_size++;
+		break;
+	case 0xFA:
+		cmd_pkt[index++] = 0xF5;
+		cmd_pkt[index++] = 0x02;
+		pkt_size++;
+		break;
+	case 0xF5:
+		cmd_pkt[index++] = 0xF5;
+		cmd_pkt[index++] = 0x03;
+		pkt_size++;
+		break;
+	default:
+		//uart2_send_byte(checksum);
+		cmd_pkt[index++] = checksum;
+		break;
+	}
+	cmd_pkt[index] = 0xFA;
+	//pkt_size = size 
+	HalUARTWrite(NPI_UART_PORT, (char *)&cmd_pkt, pkt_size);
 	return 0;
 }
 void uart2_send_byte(uint8 data)
 {
   HalUARTWrite( NPI_UART_PORT, &data, 1 );
 }
+
